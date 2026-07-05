@@ -1,0 +1,1355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GESTURAL — Hand-Controlled AR Visual Synthesizer</title>
+  <meta name="description" content="Browser-based augmented reality instrument. Sculpt sound and animated waveforms by moving your hand through physical space. No install required." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* =============================================
+       DESIGN TOKENS
+    ============================================= */
+    :root {
+      --glass-bg: rgba(255, 255, 255, 0.55);
+      --glass-border: rgba(255, 255, 255, 0.85);
+      --glass-shadow: 0 4px 32px rgba(0, 0, 0, 0.08);
+      --glass-blur: blur(28px) saturate(180%);
+      --inner-highlight: rgba(255, 255, 255, 0.9);
+      --text-primary: rgba(10, 10, 20, 0.88);
+      --text-muted: rgba(10, 10, 20, 0.42);
+      --accent-cyan: #00c2ff;
+      --accent-violet: #9b5de5;
+      --accent-rose: #f72585;
+      --font-mono: 'Space Mono', monospace;
+      --font-sans: 'Space Grotesk', sans-serif;
+    }
+
+    /* =============================================
+       RESET & BASE
+    ============================================= */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: var(--font-sans);
+      background: #0a0a14;
+    }
+
+    /* =============================================
+       DYNAMIC BACKGROUND GRADIENT
+    ============================================= */
+    #bg-gradient {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background: radial-gradient(ellipse at 50% 50%, hsl(195, 80%, 88%) 0%, hsl(230, 60%, 92%) 60%, hsl(210, 40%, 96%) 100%);
+      transition: background 0.15s ease;
+      pointer-events: none;
+    }
+
+    /* =============================================
+       VIDEO LAYER
+    ============================================= */
+    #videoEl {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      z-index: 1;
+      transform: scaleX(-1); /* Mirror for selfie view */
+    }
+
+    /* =============================================
+       CANVAS LAYERS
+    ============================================= */
+    .canvas-layer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    #particleCanvas { z-index: 2; }
+    #waveCanvas     { z-index: 3; }
+    #handCanvas     { z-index: 4; }
+
+    /* =============================================
+       UI LAYER
+    ============================================= */
+    #ui {
+      position: fixed;
+      inset: 0;
+      z-index: 5;
+      pointer-events: none;
+    }
+
+    /* =============================================
+       GLASS PANEL MIXIN
+    ============================================= */
+    .glass {
+      background: var(--glass-bg);
+      border: 1px solid var(--glass-border);
+      backdrop-filter: var(--glass-blur);
+      -webkit-backdrop-filter: var(--glass-blur);
+      box-shadow: var(--glass-shadow), inset 0 1px 0 var(--inner-highlight);
+      border-radius: 20px;
+    }
+
+    /* =============================================
+       HEADER
+    ============================================= */
+    .header {
+      position: absolute;
+      top: 20px;
+      left: 0;
+      right: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+    }
+
+    .wordmark {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.25em;
+      color: var(--text-primary);
+      text-transform: uppercase;
+      user-select: none;
+    }
+
+    .wordmark .dot {
+      color: var(--accent-violet);
+    }
+
+    /* =============================================
+       STATUS PILL
+    ============================================= */
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      height: 32px;
+      border-radius: 100px;
+      pointer-events: none;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.2);
+      flex-shrink: 0;
+      transition: background 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .status-dot.loading {
+      background: var(--accent-violet);
+      animation: pulse-dot 1s ease-in-out infinite;
+    }
+
+    .status-dot.active {
+      background: var(--accent-cyan);
+      box-shadow: 0 0 8px var(--accent-cyan), 0 0 16px rgba(0, 194, 255, 0.4);
+    }
+
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.7); }
+    }
+
+    .status-label {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      transition: color 0.3s ease;
+    }
+
+    .status-label.active {
+      color: var(--text-primary);
+    }
+
+    /* =============================================
+       HINT PANEL (right side)
+    ============================================= */
+    .hint-panel {
+      position: absolute;
+      top: 80px;
+      right: 20px;
+      width: 200px;
+      padding: 16px;
+      pointer-events: none;
+    }
+
+    .hint-title {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .hint-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px solid rgba(10, 10, 20, 0.06);
+      transition: color 0.3s ease;
+    }
+
+    .hint-row:last-child { border-bottom: none; }
+
+    .hint-gesture {
+      font-size: 16px;
+      flex-shrink: 0;
+      line-height: 1;
+      margin-top: 1px;
+    }
+
+    .hint-text {
+      font-family: var(--font-sans);
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      line-height: 1.4;
+      transition: color 0.3s ease;
+    }
+
+    .hint-row.hint-active .hint-text {
+      color: var(--text-primary);
+    }
+
+    /* =============================================
+       METRICS ROW (bottom left)
+    ============================================= */
+    .metrics {
+      position: absolute;
+      bottom: 24px;
+      left: 20px;
+      display: flex;
+      gap: 10px;
+      pointer-events: none;
+    }
+
+    .metric-card {
+      padding: 12px 16px 10px;
+      min-width: 90px;
+      transition: border-color 0.3s ease;
+    }
+
+    .metric-card.tracking {
+      border-color: rgba(0, 194, 255, 0.35);
+    }
+
+    .metric-label {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .metric-value {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--text-primary);
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+
+    .metric-bar-track {
+      height: 2px;
+      background: rgba(10, 10, 20, 0.08);
+      border-radius: 1px;
+      overflow: hidden;
+    }
+
+    .metric-bar-fill {
+      height: 100%;
+      border-radius: 1px;
+      background: linear-gradient(90deg, var(--accent-violet), var(--accent-cyan));
+      width: 0%;
+      transition: width 0.08s ease;
+    }
+
+    /* =============================================
+       WAVEFORM SELECTOR (bottom right)
+    ============================================= */
+    .wave-panel {
+      position: absolute;
+      bottom: 24px;
+      right: 20px;
+      padding: 12px;
+      pointer-events: all;
+    }
+
+    .wave-panel-label {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .wave-chips {
+      display: flex;
+      gap: 6px;
+    }
+
+    .wave-chip {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      border-radius: 100px;
+      padding: 5px 10px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+
+    .wave-chip:hover {
+      background: rgba(155, 93, 229, 0.1);
+      border-color: rgba(155, 93, 229, 0.4);
+      color: var(--text-primary);
+    }
+
+    .wave-chip.active {
+      background: rgba(155, 93, 229, 0.18);
+      border-color: rgba(155, 93, 229, 0.7);
+      color: var(--accent-violet);
+      box-shadow: 0 0 12px rgba(155, 93, 229, 0.25);
+    }
+
+    /* =============================================
+       ONBOARDING OVERLAY
+    ============================================= */
+    #overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.3);
+      backdrop-filter: blur(20px) saturate(150%);
+      -webkit-backdrop-filter: blur(20px) saturate(150%);
+      transition: opacity 0.5s ease;
+    }
+
+    #overlay.fade-out {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .overlay-card {
+      max-width: 380px;
+      width: 90%;
+      padding: 40px 36px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(32px) saturate(200%);
+      -webkit-backdrop-filter: blur(32px) saturate(200%);
+      box-shadow: 0 8px 48px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+      border-radius: 28px;
+      text-align: center;
+    }
+
+    .overlay-icon {
+      font-size: 52px;
+      margin-bottom: 20px;
+      display: block;
+      animation: float-icon 3s ease-in-out infinite;
+    }
+
+    @keyframes float-icon {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-8px); }
+    }
+
+    .overlay-title {
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: var(--text-primary);
+      margin-bottom: 12px;
+    }
+
+    .overlay-title .dot { color: var(--accent-violet); }
+
+    .overlay-desc {
+      font-family: var(--font-sans);
+      font-size: 14px;
+      font-weight: 400;
+      color: var(--text-muted);
+      line-height: 1.6;
+      margin-bottom: 32px;
+    }
+
+    .gesture-preview {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+    }
+
+    .gesture-preview-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .gesture-preview-item span:first-child { font-size: 22px; }
+
+    .gesture-preview-item span:last-child {
+      font-family: var(--font-sans);
+      font-size: 10px;
+      color: var(--text-muted);
+      font-weight: 500;
+      letter-spacing: 0.05em;
+    }
+
+    #startBtn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: #fff;
+      background: linear-gradient(135deg, rgba(155, 93, 229, 0.85), rgba(0, 194, 255, 0.85));
+      border: none;
+      border-radius: 100px;
+      padding: 14px 32px;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(155, 93, 229, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    #startBtn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 28px rgba(155, 93, 229, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    }
+
+    #startBtn:active {
+      transform: translateY(0);
+    }
+
+    /* =============================================
+       CAMERA DENIED MESSAGE
+    ============================================= */
+    #no-camera-msg {
+      display: none;
+      position: absolute;
+      bottom: 80px;
+      left: 20px;
+      padding: 12px 16px;
+      max-width: 280px;
+    }
+
+    #no-camera-msg p {
+      font-family: var(--font-sans);
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    #no-camera-msg strong {
+      color: var(--text-primary);
+    }
+
+    /* =============================================
+       REDUCED MOTION
+    ============================================= */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* =============================================
+       RESPONSIVE
+    ============================================= */
+    @media (max-width: 600px) {
+      .hint-panel { display: none; }
+      .metrics { gap: 6px; }
+      .metric-card { min-width: 76px; padding: 10px 12px 8px; }
+      .metric-value { font-size: 18px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Background gradient (shifts with hand position) -->
+  <div id="bg-gradient"></div>
+
+  <!-- AR Camera Feed (layer 1) -->
+  <video id="videoEl" autoplay playsinline muted></video>
+
+  <!-- Canvas layers (layers 2-4) -->
+  <canvas id="particleCanvas" class="canvas-layer"></canvas>
+  <canvas id="waveCanvas"     class="canvas-layer"></canvas>
+  <canvas id="handCanvas"     class="canvas-layer"></canvas>
+
+  <!-- UI Glass Layer (layer 5) -->
+  <div id="ui">
+
+    <!-- Header -->
+    <header class="header">
+      <div class="wordmark">GESTURAL<span class="dot">.</span></div>
+      <div class="status-pill glass" id="statusPill">
+        <div class="status-dot" id="statusDot"></div>
+        <span class="status-label" id="statusLabel">STANDBY</span>
+      </div>
+    </header>
+
+    <!-- Gesture Reference Panel -->
+    <aside class="hint-panel glass" id="hintPanel">
+      <div class="hint-title">Gestures</div>
+      <div class="hint-row" id="hint-open">
+        <span class="hint-gesture">🖐</span>
+        <span class="hint-text">Open — pitch &amp; volume active</span>
+      </div>
+      <div class="hint-row" id="hint-pinch">
+        <span class="hint-gesture">🤌</span>
+        <span class="hint-text">Pinch — cycle waveform</span>
+      </div>
+      <div class="hint-row" id="hint-fist">
+        <span class="hint-gesture">✊</span>
+        <span class="hint-text">Fist — silence everything</span>
+      </div>
+      <div class="hint-row" id="hint-point">
+        <span class="hint-gesture">☝️</span>
+        <span class="hint-text">Point — laser beam</span>
+      </div>
+    </aside>
+
+    <!-- Metrics Row -->
+    <div class="metrics" id="metrics">
+      <div class="metric-card glass" id="pitchCard">
+        <div class="metric-label">Pitch</div>
+        <div class="metric-value" id="pitchVal">—</div>
+        <div class="metric-bar-track">
+          <div class="metric-bar-fill" id="pitchBar"></div>
+        </div>
+      </div>
+      <div class="metric-card glass" id="volCard">
+        <div class="metric-label">Volume</div>
+        <div class="metric-value" id="volVal">—</div>
+        <div class="metric-bar-track">
+          <div class="metric-bar-fill" id="volBar"></div>
+        </div>
+      </div>
+      <div class="metric-card glass" id="gestureCard">
+        <div class="metric-label">Gesture</div>
+        <div class="metric-value" id="gestureVal" style="font-size:16px;">—</div>
+      </div>
+
+      <!-- No camera message shown here -->
+      <div class="metric-card glass" id="no-camera-msg">
+        <p><strong>Camera access denied.</strong><br>Click the camera icon in your browser's address bar and allow access, then reload.</p>
+      </div>
+    </div>
+
+    <!-- Waveform Selector -->
+    <div class="wave-panel glass" id="wavePanel">
+      <div class="wave-panel-label">Waveform</div>
+      <div class="wave-chips">
+        <button class="wave-chip active" id="chip-sine"   data-wave="sine">SINE</button>
+        <button class="wave-chip"        id="chip-square" data-wave="square">SQR</button>
+        <button class="wave-chip"        id="chip-sawtooth" data-wave="sawtooth">SAW</button>
+        <button class="wave-chip"        id="chip-triangle" data-wave="triangle">TRI</button>
+      </div>
+    </div>
+
+  </div><!-- #ui -->
+
+  <!-- Onboarding Overlay -->
+  <div id="overlay">
+    <div class="overlay-card">
+      <span class="overlay-icon">🖐</span>
+      <h1 class="overlay-title">GESTURAL<span class="dot">.</span></h1>
+      <p class="overlay-desc">A hand-controlled AR synthesizer. Move your hand to sculpt sound and light directly in space.</p>
+      <div class="gesture-preview">
+        <div class="gesture-preview-item"><span>🖐</span><span>Play</span></div>
+        <div class="gesture-preview-item"><span>🤌</span><span>Waveform</span></div>
+        <div class="gesture-preview-item"><span>✊</span><span>Silence</span></div>
+        <div class="gesture-preview-item"><span>☝️</span><span>Laser</span></div>
+      </div>
+      <button id="startBtn">⟡ Enable Camera</button>
+    </div>
+  </div>
+
+  <!-- MediaPipe + Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <script>
+  (function () {
+    'use strict';
+
+    /* ================================================
+       STATE — single source of truth
+    ================================================ */
+    const state = {
+      handX: 0.5,        // 0=left, 1=right (mirrored canvas coords)
+      handY: 0.5,        // 0=top, 1=bottom
+      smoothedY: 0.5,    // lerped wave Y anchor
+      waveX: 0.75,
+      waveY: 0.5,
+      smoothedWaveX: 0.75,
+      smoothedWaveY: 0.5,
+      tiltAngle: 0,      // wrist rotation in radians, clamped ±60°
+      gesture: 'none',   // 'open' | 'fist' | 'pinch' | 'point' | 'peace' | 'none'
+      prevGesture: 'none',
+      gestureBuffer: [],  // last N gesture reads for debounce
+      GESTURE_FRAMES: 2,
+      waveform: 'sine',  // current oscillator type
+      isTracking: false,
+      audioStarted: false,
+      lastPinchTime: 0,
+      PINCH_DEBOUNCE: 600,
+      palmX: 0,          // canvas px for particle spawn
+      palmY: 0,
+      indexTipX: 0,      // canvas px for laser origin
+      indexTipY: 0,
+      particles: [],
+      PARTICLE_CAP: 400,
+      landmarks: null,
+      reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    };
+
+    const WAVEFORM_CYCLE = ['sine', 'square', 'sawtooth', 'triangle'];
+
+    /* ================================================
+       ELEMENTS
+    ================================================ */
+    const videoEl       = document.getElementById('videoEl');
+    const particleCanvas= document.getElementById('particleCanvas');
+    const waveCanvas    = document.getElementById('waveCanvas');
+    const handCanvas    = document.getElementById('handCanvas');
+    const pCtx          = particleCanvas.getContext('2d');
+    const wCtx          = waveCanvas.getContext('2d');
+    const hCtx          = handCanvas.getContext('2d');
+    const overlay       = document.getElementById('overlay');
+    const startBtn      = document.getElementById('startBtn');
+    const statusDot     = document.getElementById('statusDot');
+    const statusLabel   = document.getElementById('statusLabel');
+    const pitchVal      = document.getElementById('pitchVal');
+    const pitchBar      = document.getElementById('pitchBar');
+    const volVal        = document.getElementById('volVal');
+    const volBar        = document.getElementById('volBar');
+    const gestureVal    = document.getElementById('gestureVal');
+    const pitchCard     = document.getElementById('pitchCard');
+    const volCard       = document.getElementById('volCard');
+    const gestureCard   = document.getElementById('gestureCard');
+    const hintRows      = { open: document.getElementById('hint-open'), pinch: document.getElementById('hint-pinch'), fist: document.getElementById('hint-fist'), point: document.getElementById('hint-point') };
+    const waveChips     = document.querySelectorAll('.wave-chip');
+    const bgGradient    = document.getElementById('bg-gradient');
+    const noCameraMsg   = document.getElementById('no-camera-msg');
+
+    /* ================================================
+       CANVAS RESIZE
+    ================================================ */
+    function resizeCanvases() {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      [particleCanvas, waveCanvas, handCanvas].forEach(c => {
+        c.width = w;
+        c.height = h;
+      });
+    }
+    resizeCanvases();
+    window.addEventListener('resize', resizeCanvases);
+
+    /* ================================================
+       AUDIO ENGINE
+    ================================================ */
+    let audioCtx, oscillator, gainNode, analyserNode, analyserData;
+
+    function initAudio() {
+      if (state.audioStarted) return;
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      oscillator = audioCtx.createOscillator();
+      gainNode   = audioCtx.createGain();
+      analyserNode = audioCtx.createAnalyser();
+      analyserNode.fftSize = 256;
+      analyserData = new Uint8Array(analyserNode.frequencyBinCount);
+
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+      gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(analyserNode);
+      analyserNode.connect(audioCtx.destination);
+      oscillator.start();
+      state.audioStarted = true;
+    }
+
+    function updateAudio() {
+      if (!state.audioStarted || !state.isTracking) return;
+      const t = audioCtx.currentTime;
+      const freq = state.handX * (1280 - 80) + 80;
+      const targetGain = state.gesture === 'fist'
+        ? 0
+        : (1 - state.handY) * 0.6;
+
+      oscillator.frequency.linearRampToValueAtTime(freq, t + 0.05);
+      gainNode.gain.linearRampToValueAtTime(
+        targetGain,
+        t + (state.gesture === 'fist' ? 0.15 : 0.05)
+      );
+      oscillator.type = state.waveform;
+    }
+
+    function silenceAudio() {
+      if (!state.audioStarted) return;
+      gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
+    }
+
+    /* ================================================
+       GESTURE DETECTION
+    ================================================ */
+    function dist2D(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function isFingerExtended(lm, tip, pip, mcp) {
+      return lm[tip].y < lm[pip].y && lm[pip].y < lm[mcp].y;
+    }
+
+    function classifyGesture(lm) {
+      // Finger indices: [tip, pip, mcp]
+      const fingers = [
+        [8, 6, 5],   // index
+        [12, 10, 9], // middle
+        [16, 14, 13],// ring
+        [20, 18, 17],// pinky
+      ];
+
+      const extended = fingers.map(([tip, pip, mcp]) => isFingerExtended(lm, tip, pip, mcp));
+      const pinchDist = dist2D(lm[4], lm[8]); // thumb tip to index tip
+
+      // Pinch check
+      if (pinchDist < 0.07) return 'pinch';
+
+      // Count extended fingers
+      const extCount = extended.filter(Boolean).length;
+
+      // Fist: no fingers extended
+      if (extCount === 0) return 'fist';
+
+      // Point: only index extended
+      if (extended[0] && !extended[1] && !extended[2] && !extended[3]) return 'point';
+
+      // Peace: index + middle extended
+      if (extended[0] && extended[1] && !extended[2] && !extended[3]) return 'peace';
+
+      // Open: all or most fingers extended
+      if (extCount >= 3) return 'open';
+
+      return 'open';
+    }
+
+    function commitGesture(raw) {
+      // 2-frame debounce: only commit if last N frames agree
+      state.gestureBuffer.push(raw);
+      if (state.gestureBuffer.length > state.GESTURE_FRAMES) {
+        state.gestureBuffer.shift();
+      }
+      if (state.gestureBuffer.length === state.GESTURE_FRAMES &&
+          state.gestureBuffer.every(g => g === raw)) {
+        return raw;
+      }
+      return state.gesture; // keep previous
+    }
+
+    /* ================================================
+       PARTICLE SYSTEM
+    ================================================ */
+    function spawnParticle(type) {
+      if (state.particles.length >= state.PARTICLE_CAP) {
+        state.particles.shift(); // FIFO cull
+      }
+
+      const hue = 180 + state.handX * 180;
+      let p;
+
+      if (type === 'laser') {
+        const angle = (Math.random() * Math.PI * 2);
+        const speed = 4 + Math.random() * 8;
+        p = {
+          x: state.indexTipX,
+          y: state.indexTipY,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1,
+          decay: 0.04,
+          size: 2 + Math.random() * 3,
+          hue: 300,
+          saturation: 100,
+          lightness: 70,
+          type: 'laser',
+        };
+      } else {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 0.5 + Math.random() * 2.5;
+        p = {
+          x: state.palmX + (Math.random() - 0.5) * 30,
+          y: state.palmY + (Math.random() - 0.5) * 30,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1,
+          decay: 0.008 + Math.random() * 0.015,
+          size: 2 + Math.random() * 3,
+          hue: hue,
+          saturation: 90,
+          lightness: 65,
+          type: 'ambient',
+        };
+      }
+      state.particles.push(p);
+    }
+
+    function updateParticles() {
+      for (let i = state.particles.length - 1; i >= 0; i--) {
+        const p = state.particles[i];
+        p.vy += 0.04;
+        p.vx *= 0.98;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= p.decay;
+        if (p.life <= 0) {
+          state.particles.splice(i, 1);
+        }
+      }
+    }
+
+    function drawParticles() {
+      pCtx.clearRect(0, 0, particleCanvas.width, particleCanvas.height);
+      for (const p of state.particles) {
+        const size = p.size * p.life;
+        pCtx.save();
+        pCtx.globalAlpha = p.life * 0.8;
+        pCtx.fillStyle = `hsl(${p.hue}, ${p.saturation}%, ${p.lightness}%)`;
+        pCtx.shadowColor = `hsl(${p.hue}, ${p.saturation}%, ${p.lightness}%)`;
+        pCtx.shadowBlur = p.type === 'laser' ? 8 : 4;
+        pCtx.beginPath();
+        pCtx.arc(p.x, p.y, Math.max(0.5, size), 0, Math.PI * 2);
+        pCtx.fill();
+        pCtx.restore();
+      }
+    }
+
+    /* ================================================
+       WAVE DRAW
+    ================================================ */
+    function drawRibbon(ctx, cx, cy, ribbonW, maxAmp, rotation, useAnalyser) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      if (rotation) ctx.rotate(rotation);
+
+      const t = Date.now() / 1000;
+      const numStrands = 8;
+      const pointsPerStrand = 200;
+      const halfW = ribbonW / 2;
+
+      // Get analyser data if available
+      let aData = null;
+      if (useAnalyser && analyserNode) {
+        analyserNode.getByteTimeDomainData(analyserData);
+        aData = analyserData;
+      }
+
+      // Collect all dots with z-depth for back-to-front sorting
+      const dots = [];
+
+      for (let s = 0; s < numStrands; s++) {
+        const strandPhase = (s / numStrands) * Math.PI * 2;
+        const strandOffset = ((s / numStrands) - 0.5) * 2; // -1 to 1
+
+        for (let i = 0; i < pointsPerStrand; i++) {
+          const tNorm = i / (pointsPerStrand - 1);
+          const x = tNorm * ribbonW - halfW;
+
+          // Multiple sine layers for organic flow
+          const wave1 = Math.sin(tNorm * Math.PI * 3 + strandPhase + t * 1.2);
+          const wave2 = Math.sin(tNorm * Math.PI * 5 - strandPhase * 0.7 + t * 0.8);
+          const wave3 = Math.cos(tNorm * Math.PI * 2 + strandPhase * 1.3 + t * 1.5);
+
+          // Combine for organic ribbon shape
+          let y = (wave1 * 0.5 + wave2 * 0.3 + wave3 * 0.2) * maxAmp;
+
+          // Add audio reactivity
+          if (aData) {
+            const dataIndex = Math.floor(tNorm * (aData.length - 1));
+            const v = (aData[dataIndex] / 128.0) - 1.0;
+            y += v * maxAmp * 0.6;
+          }
+
+          // Z-depth for 3D effect (determines size and opacity)
+          const zWave = Math.sin(tNorm * Math.PI * 4 + strandPhase + t * 2.0);
+          const z = zWave * 0.5 + 0.5; // 0 (back) to 1 (front)
+
+          // Spread strands vertically based on offset
+          y += strandOffset * maxAmp * 0.15 * wave3;
+
+          // Color: blue (left) → violet (center) → magenta/pink (right)
+          const hue = 220 + tNorm * 120; // 220 (blue) → 340 (magenta)
+          const sat = 85 + z * 15;
+          const light = 55 + z * 20;
+
+          // Size based on depth
+          const baseSize = 1.0 + z * 2.5;
+          // Taper at edges
+          const edgeFade = Math.sin(tNorm * Math.PI);
+          const size = baseSize * (0.3 + edgeFade * 0.7);
+
+          // Opacity based on depth and edge fade
+          const alpha = (0.3 + z * 0.7) * (0.2 + edgeFade * 0.8);
+
+          dots.push({ x, y, z, size, hue, sat, light, alpha });
+        }
+      }
+
+      // Sort back-to-front for proper layering
+      dots.sort((a, b) => a.z - b.z);
+
+      // Draw all dots
+      for (const d of dots) {
+        ctx.globalAlpha = d.alpha;
+        ctx.fillStyle = `hsl(${d.hue}, ${d.sat}%, ${d.light}%)`;
+        ctx.shadowColor = `hsla(${d.hue}, 90%, 70%, ${d.alpha * 0.8})`;
+        ctx.shadowBlur = 4 + d.z * 8;
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, Math.max(0.5, d.size), 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    function drawWave() {
+      wCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+      if (!state.isTracking || !state.audioStarted) return;
+
+      if (state.reducedMotion) {
+        state.smoothedWaveX = state.waveX;
+        state.smoothedWaveY = state.waveY;
+      } else {
+        state.smoothedWaveX += (state.waveX - state.smoothedWaveX) * 0.15;
+        state.smoothedWaveY += (state.waveY - state.smoothedWaveY) * 0.15;
+      }
+
+      // Volume modulates amplitude
+      const volume = state.gesture === 'fist' ? 0 : (1 - state.handY) * 0.6;
+      const ampScale = volume / 0.6;
+      const maxAmp = 40 + (waveCanvas.height * 0.12) * ampScale;
+
+      const cx = state.smoothedWaveX * waveCanvas.width;
+      const cy = state.smoothedWaveY * waveCanvas.height;
+      const ribbonW = waveCanvas.width * 0.35;
+
+      drawRibbon(wCtx, cx, cy, ribbonW, maxAmp, state.tiltAngle, true);
+
+      // --- Laser beam from index finger ---
+      if (state.gesture === 'point' && state.landmarks) {
+        drawLaser();
+        return;
+      }
+    }
+
+    function drawLaser() {
+      const ix = state.indexTipX;
+      const iy = state.indexTipY;
+
+      // Direction: from index MCP to tip
+      const lm = state.landmarks;
+      const mcpX = lm[5].x * waveCanvas.width;
+      const mcpY = lm[5].y * waveCanvas.height;
+      const dx = ix - mcpX;
+      const dy = iy - mcpY;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = dx / len;
+      const ny = dy / len;
+      const beamLen = 300;
+
+      wCtx.save();
+      wCtx.strokeStyle = `hsl(300, 100%, 70%)`;
+      wCtx.lineWidth = 2;
+      wCtx.shadowColor = `hsl(300, 100%, 70%)`;
+      wCtx.shadowBlur = 16;
+      wCtx.lineCap = 'round';
+
+      wCtx.beginPath();
+      wCtx.moveTo(ix, iy);
+      wCtx.lineTo(ix + nx * beamLen, iy + ny * beamLen);
+      wCtx.stroke();
+
+      // Core bright line
+      wCtx.strokeStyle = `rgba(255, 255, 255, 0.9)`;
+      wCtx.lineWidth = 0.8;
+      wCtx.shadowBlur = 4;
+      wCtx.beginPath();
+      wCtx.moveTo(ix, iy);
+      wCtx.lineTo(ix + nx * beamLen, iy + ny * beamLen);
+      wCtx.stroke();
+      wCtx.restore();
+    }
+
+    /* ================================================
+       HAND SKELETON DRAW
+    ================================================ */
+    const HAND_CONNECTIONS = [
+      [0,1],[1,2],[2,3],[3,4],
+      [0,5],[5,6],[6,7],[7,8],
+      [0,9],[9,10],[10,11],[11,12],
+      [0,13],[13,14],[14,15],[15,16],
+      [0,17],[17,18],[18,19],[19,20],
+      [5,9],[9,13],[13,17],
+    ];
+
+    const FINGERTIPS = new Set([4, 8, 12, 16, 20]);
+
+    function drawHand(lm) {
+      hCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
+      if (!lm) return;
+
+      const w = handCanvas.width;
+      const h = handCanvas.height;
+      const hue = 180 + state.handX * 180;
+
+      // Map landmark coords to canvas (mirror since video is mirrored)
+      const pts = lm.map(p => ({
+        x: (1 - p.x) * w,
+        y: p.y * h,
+      }));
+
+      // Connections
+      hCtx.save();
+      hCtx.strokeStyle = `hsla(${hue}, 90%, 65%, 0.5)`;
+      hCtx.lineWidth = 1.5;
+      hCtx.shadowColor = `hsl(${hue}, 90%, 65%)`;
+      hCtx.shadowBlur = 6;
+      hCtx.lineCap = 'round';
+
+      for (const [a, b] of HAND_CONNECTIONS) {
+        hCtx.beginPath();
+        hCtx.moveTo(pts[a].x, pts[a].y);
+        hCtx.lineTo(pts[b].x, pts[b].y);
+        hCtx.stroke();
+      }
+
+      // Joint dots
+      for (let i = 0; i < 21; i++) {
+        const isTip = FINGERTIPS.has(i);
+        const radius = isTip ? 5 : 3;
+        const lightness = isTip ? '100%' : '80%';
+
+        hCtx.beginPath();
+        hCtx.fillStyle = `hsl(${hue}, 90%, ${lightness})`;
+        hCtx.shadowColor = `hsl(${hue}, 90%, 75%)`;
+        hCtx.shadowBlur = isTip ? 10 : 5;
+        hCtx.arc(pts[i].x, pts[i].y, radius, 0, Math.PI * 2);
+        hCtx.fill();
+      }
+
+      hCtx.restore();
+    }
+
+    /* ================================================
+       UI UPDATE
+    ================================================ */
+    const GESTURE_LABELS = {
+      open: '🖐 OPEN',
+      fist: '✊ FIST',
+      pinch: '🤌 PINCH',
+      point: '☝️ POINT',
+      peace: '✌️ PEACE',
+      none: '—',
+    };
+
+    function updateUI() {
+      const tracking = state.isTracking;
+      const freq = Math.round(state.handX * (1280 - 80) + 80);
+      const vol = Math.round((1 - state.handY) * 100);
+
+      if (tracking) {
+        pitchVal.textContent = freq + 'Hz';
+        volVal.textContent = vol + '%';
+        gestureVal.textContent = GESTURE_LABELS[state.gesture] || '—';
+        pitchBar.style.width = (state.handX * 100) + '%';
+        volBar.style.width = ((1 - state.handY) * 100) + '%';
+        [pitchCard, volCard, gestureCard].forEach(c => {
+          c.classList.toggle('tracking', state.gesture !== 'fist');
+        });
+      } else {
+        pitchVal.textContent = '—';
+        volVal.textContent = '—';
+        gestureVal.textContent = '—';
+        pitchBar.style.width = '0%';
+        volBar.style.width = '0%';
+        [pitchCard, volCard, gestureCard].forEach(c => c.classList.remove('tracking'));
+      }
+
+      // Hint panel: highlight active gesture
+      Object.keys(hintRows).forEach(key => {
+        hintRows[key].classList.toggle('hint-active', state.gesture === key);
+      });
+
+      // Waveform chips
+      waveChips.forEach(chip => {
+        chip.classList.toggle('active', chip.dataset.wave === state.waveform);
+      });
+
+      // Background gradient
+      const hue = 180 + state.handX * 180;
+      const bx = state.handX * 100;
+      const by = state.handY * 100;
+      bgGradient.style.background = `radial-gradient(ellipse at ${bx}% ${by}%, hsl(${hue}, 70%, 90%) 0%, hsl(${hue + 40}, 50%, 93%) 55%, hsl(${hue + 80}, 30%, 96%) 100%)`;
+    }
+
+    /* ================================================
+       MEDIAPIPE RESULTS HANDLER
+    ================================================ */
+    function onResults(results) {
+      const landmarksList = results.multiHandLandmarks;
+
+      if (landmarksList && landmarksList.length > 0) {
+        state.isTracking = true;
+        
+        const primaryLm = landmarksList[0];
+        const secondaryLm = landmarksList.length > 1 ? landmarksList[1] : null;
+
+        state.landmarks = primaryLm;
+
+        // Raw hand position from wrist (landmark 0)
+        // x is flipped in mirrored video
+        state.handX = 1 - primaryLm[0].x;
+        state.handY = primaryLm[0].y;
+
+        // Palm position for particles (canvas coords)
+        state.palmX = state.handX * particleCanvas.width;
+        state.palmY = state.handY * particleCanvas.height;
+
+        // Index fingertip for laser (canvas coords, mirrored)
+        state.indexTipX = (1 - primaryLm[8].x) * waveCanvas.width;
+        state.indexTipY = primaryLm[8].y * waveCanvas.height;
+
+        if (secondaryLm) {
+          state.waveX = 1 - secondaryLm[0].x;
+          state.waveY = secondaryLm[0].y;
+        } else {
+          // Gently return to default position if no secondary hand
+          state.waveX += (0.75 - state.waveX) * 0.05;
+          state.waveY += (0.5 - state.waveY) * 0.05;
+        }
+
+        // Wrist tilt: angle from landmark 0 to landmark 9
+        const wrist = primaryLm[0];
+        const mcp9  = primaryLm[9];
+        const rawAngle = Math.atan2(mcp9.y - wrist.y, (1 - mcp9.x) - (1 - wrist.x));
+        const clamp = 60 * Math.PI / 180;
+        state.tiltAngle = Math.max(-clamp, Math.min(clamp, rawAngle - Math.PI / 2));
+
+        // Gesture
+        const rawGesture = classifyGesture(primaryLm);
+        const committed = commitGesture(rawGesture);
+
+        // Handle pinch waveform cycle (with debounce)
+        if (committed === 'pinch' && state.gesture !== 'pinch') {
+          const now = Date.now();
+          if (now - state.lastPinchTime > state.PINCH_DEBOUNCE) {
+            const idx = WAVEFORM_CYCLE.indexOf(state.waveform);
+            state.waveform = WAVEFORM_CYCLE[(idx + 1) % WAVEFORM_CYCLE.length];
+            state.lastPinchTime = now;
+          }
+        }
+
+        state.gesture = committed;
+
+        // Spawn particles
+        if (state.gesture === 'point') {
+          // Laser scatter
+          if (Math.random() < 0.6) spawnParticle('laser');
+        } else if (state.gesture !== 'fist') {
+          if (Math.random() < 0.15) spawnParticle('ambient');
+        }
+
+        updateAudio();
+
+        // Status
+        statusDot.className = 'status-dot active';
+        statusLabel.textContent = 'ACTIVE';
+        statusLabel.classList.add('active');
+
+      } else {
+        state.isTracking = false;
+        state.landmarks = null;
+        state.gestureBuffer = [];
+        state.gesture = 'none';
+        state.waveX = 0.75;
+        state.waveY = 0.5;
+        hCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
+        silenceAudio();
+
+        statusDot.className = 'status-dot loading';
+        statusLabel.textContent = 'SEARCHING';
+        statusLabel.classList.remove('active');
+      }
+
+      drawHand(lm ? state.landmarks : null);
+    }
+
+    /* ================================================
+       RENDER LOOP
+    ================================================ */
+    function renderLoop() {
+      updateParticles();
+      drawParticles();
+      drawWave();
+      updateUI();
+      requestAnimationFrame(renderLoop);
+    }
+
+    /* ================================================
+       MEDIAPIPE + CAMERA INIT
+    ================================================ */
+    let handsModel, camera;
+
+    async function startCamera() {
+      // Resume audio context if suspended
+      initAudio();
+
+      // Update overlay
+      startBtn.disabled = true;
+      startBtn.textContent = '⟡ Starting…';
+      statusDot.className = 'status-dot loading';
+      statusLabel.textContent = 'LOADING';
+
+      try {
+        handsModel = new Hands({
+          locateFile: (file) =>
+            `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+        });
+
+        handsModel.setOptions({
+          maxNumHands: 2,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.7,
+          minTrackingConfidence: 0.6,
+        });
+
+        handsModel.onResults(onResults);
+
+        camera = new Camera(videoEl, {
+          onFrame: async () => {
+            await handsModel.send({ image: videoEl });
+          },
+          width: 640,
+          height: 480,
+          facingMode: 'user',
+        });
+
+        await camera.start();
+
+        // Dismiss overlay
+        overlay.classList.add('fade-out');
+        setTimeout(() => { overlay.style.display = 'none'; }, 500);
+
+        statusDot.className = 'status-dot loading';
+        statusLabel.textContent = 'SEARCHING';
+
+        // Start render loop
+        renderLoop();
+
+      } catch (err) {
+        console.error('Camera/MediaPipe error:', err);
+        // Camera denied or failed
+        overlay.classList.add('fade-out');
+        setTimeout(() => { overlay.style.display = 'none'; }, 300);
+
+        statusDot.className = 'status-dot';
+        statusLabel.textContent = 'NO CAMERA';
+        noCameraMsg.style.display = 'block';
+
+        // Still run render loop for particles/wave (no hand data)
+        renderLoop();
+      }
+    }
+
+    /* ================================================
+       EVENT LISTENERS
+    ================================================ */
+    startBtn.addEventListener('click', startCamera);
+
+    // Manual waveform chip clicks
+    waveChips.forEach(chip => {
+      chip.addEventListener('click', () => {
+        state.waveform = chip.dataset.wave;
+        if (state.audioStarted) oscillator.type = state.waveform;
+        updateUI();
+      });
+    });
+
+    /* ================================================
+       INITIAL RENDER (before camera starts)
+    ================================================ */
+    // Draw a placeholder wave on load
+    (function drawIdleWave() {
+      function idle() {
+        wCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
+
+        const cx = waveCanvas.width * 0.75;
+        const cy = waveCanvas.height * 0.5;
+        const ribbonW = waveCanvas.width * 0.35;
+
+        drawRibbon(wCtx, cx, cy, ribbonW, 35, 0, false);
+
+        if (!state.isTracking && !state.audioStarted) {
+          requestAnimationFrame(idle);
+        }
+      }
+      idle();
+    })();
+
+  })();
+  </script>
+</body>
+</html>

@@ -1,140 +1,123 @@
 /**
  * waveRenderer.js
- * Draws the visual waveform on the wave canvas.
- * No audio — wave is generated mathematically each frame.
+ * Draws the 3D particle ribbon wave on the wave canvas.
  *
- * Hand X → wave frequency (1×–8× cycles across screen)
- * Hand Y → wave amplitude (0–100% of max)
- * Wrist tilt → canvas rotation (±60°)
- * amplitudeScale → lerped 0→1, collapses on fist
+ * Primary Hand Y → wave amplitude (0–100% of max)
+ * Secondary Hand X, Y → ribbon position (waveX, waveY in engine)
  */
 
-// ── Wave Generator Functions ──────────────────────────────────────
-const WAVE_FN = {
-  sine: (t) => Math.sin(t),
-
-  square: (t) => (Math.sin(t) >= 0 ? 1 : -1),
-
-  sawtooth: (t) => {
-    // Normalise to [0,1) then map to [-1,+1)
-    const n = ((t / (2 * Math.PI)) % 1 + 1) % 1;
-    return 2 * n - 1;
-  },
-
-  triangle: (t) => {
-    const n = ((t / (2 * Math.PI)) % 1 + 1) % 1;
-    return n < 0.5 ? 4 * n - 1 : 3 - 4 * n;
-  },
-};
-
-const NUM_POINTS = 300;
-
-// ── Main draw entry ───────────────────────────────────────────────
+// ── Main entry ───────────────────────────────────────────────────
 export function drawWave(ctx, engine, width, height) {
   ctx.clearRect(0, 0, width, height);
 
   const {
-    handX, handY, smoothedY, tiltAngle,
-    gesture, waveform, wavePhase, amplitudeScale, isTracking,
-    indexTipX, indexTipY, landmarks,
+    handY,
+    smoothedWaveX,
+    smoothedWaveY,
+    amplitudeScale,
+    isTracking,
+    gesture,
+    landmarks,
   } = engine;
 
   // Idle animation when no hand tracked
   if (!isTracking) {
-    drawIdleWave(ctx, width, height, wavePhase);
+    drawIdleWave(ctx, width, height);
     return;
   }
 
-  const hue       = 180 + handX * 180;           // cyan → magenta
-  const frequency = 1 + handX * 7;               // 1 to 8 cycles
-  const maxAmp    = height * 0.22;
-  const amplitude = (1 - handY) * maxAmp * amplitudeScale;
+  // Amplitude driven by primary hand Y position
+  const volume = gesture === 'fist' ? 0 : (1 - handY) * 0.6;
+  const ampScale = volume / 0.6;
+  const maxAmp = 40 + (height * 0.12) * ampScale * amplitudeScale;
 
-  const cx = width / 2;
-  const cy = smoothedY;
+  // Position driven by secondary hand (smoothed)
+  const cx = smoothedWaveX * width;
+  const cy = smoothedWaveY * height;
+  const ribbonW = width * 0.32;
 
-  const waveFn = WAVE_FN[waveform] || WAVE_FN.sine;
-
-  // ── Primary wave ─────────────────────────────────────────────
-  ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(tiltAngle);
-
-  // Outer glow pass (wider, more blur)
-  ctx.beginPath();
-  ctx.strokeStyle = `hsla(${hue}, 90%, 65%, 0.25)`;
-  ctx.lineWidth   = 8;
-  ctx.shadowColor = `hsl(${hue}, 90%, 65%)`;
-  ctx.shadowBlur  = 28;
-  ctx.lineCap     = 'round';
-  ctx.lineJoin    = 'round';
-  buildWavePath(ctx, waveFn, frequency, amplitude, wavePhase, width, NUM_POINTS);
-  ctx.stroke();
-
-  // Core line pass
-  ctx.beginPath();
-  ctx.strokeStyle = `hsl(${hue}, 90%, 65%)`;
-  ctx.lineWidth   = 2.5;
-  ctx.shadowBlur  = 14;
-  buildWavePath(ctx, waveFn, frequency, amplitude, wavePhase, width, NUM_POINTS);
-  ctx.stroke();
-
-  // ── Second harmonic (always sine @ 2× frequency) ─────────────
-  if (amplitude > 3) {
-    ctx.beginPath();
-    ctx.strokeStyle = `hsla(${hue}, 90%, 75%, 0.3)`;
-    ctx.lineWidth   = 1.5;
-    ctx.shadowBlur  = 6;
-    ctx.globalAlpha = 0.5;
-    buildWavePath(ctx, WAVE_FN.sine, frequency * 2, amplitude * 0.4, wavePhase * 1.3, width, NUM_POINTS);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
-
-  ctx.restore();
+  drawRibbon(ctx, cx, cy, ribbonW, maxAmp, 0);
 
   // ── Laser beam (point gesture) ────────────────────────────────
   if (gesture === 'point' && landmarks) {
     drawLaser(ctx, engine, width, height);
   }
-
-  // ── Subtle pulse rings at wave anchor ─────────────────────────
-  if (gesture !== 'fist' && amplitude > 6) {
-    drawPulseRings(ctx, cx, cy, hue, wavePhase);
-  }
 }
 
-// ── Build wave path helper ─────────────────────────────────────────
-function buildWavePath(ctx, waveFn, frequency, amplitude, phase, width, nPts) {
-  const sliceWidth = width / nPts;
-  for (let i = 0; i < nPts; i++) {
-    const x = i * sliceWidth - width / 2;
-    const t = (i / nPts) * frequency * Math.PI * 2 + phase;
-    const y = waveFn(t) * amplitude;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+// ── 3D Particle Ribbon ─────────────────────────────────────────────
+function drawRibbon(ctx, cx, cy, ribbonW, amp, rotation) {
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (rotation) ctx.rotate(rotation);
+
+  const t = Date.now() / 1000;
+  const numStrands = 12;
+  const ptsPerStrand = 180;
+  const halfW = ribbonW / 2;
+
+  // Pre-build all dots
+  const dots = [];
+
+  for (let s = 0; s < numStrands; s++) {
+    const sp = (s / numStrands) * Math.PI * 2; // strand phase
+
+    for (let i = 0; i < ptsPerStrand; i++) {
+      const n = i / (ptsPerStrand - 1); // 0..1 normalized position
+      const x = n * ribbonW - halfW;
+
+      // Edge taper: fade dots at both ends
+      const edge = Math.sin(n * Math.PI);
+
+      // 3 overlapping sine waves for organic ribbon shape
+      const w1 = Math.sin(n * Math.PI * 3.0 + sp + t * 1.0);
+      const w2 = Math.sin(n * Math.PI * 5.5 + sp * 0.6 - t * 0.7);
+      const w3 = Math.cos(n * Math.PI * 2.0 - sp * 1.2 + t * 1.3);
+      const y = (w1 * 0.55 + w2 * 0.3 + w3 * 0.15) * amp * edge;
+
+      // Z for 3D depth layering
+      const z = (Math.sin(n * Math.PI * 4 + sp + t * 1.8) + 1) * 0.5;
+
+      // Color: blue(220) → violet(280) → magenta(330)
+      const hue = 220 + n * 110;
+      const sat = 80 + z * 20;
+      const light = 50 + z * 25;
+
+      // Size: depth + edge taper
+      const size = (0.8 + z * 2.0) * (0.3 + edge * 0.7);
+      // Opacity
+      const alpha = (0.25 + z * 0.75) * (0.15 + edge * 0.85);
+
+      dots.push({ x, y, z, size, hue, sat, light, alpha });
+    }
   }
+
+  // Sort back-to-front
+  dots.sort((a, b) => a.z - b.z);
+
+  // Draw
+  ctx.shadowBlur = 0; // reset once
+  for (const d of dots) {
+    if (d.size < 0.3 || d.alpha < 0.05) continue; // skip invisible dots
+    ctx.globalAlpha = d.alpha;
+    ctx.fillStyle = `hsl(${d.hue}, ${d.sat}%, ${d.light}%)`;
+    ctx.shadowColor = `hsl(${d.hue}, 90%, 70%)`;
+    ctx.shadowBlur = 3 + d.z * 6;
+    ctx.beginPath();
+    ctx.arc(d.x, d.y, d.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 
 // ── Idle animation ─────────────────────────────────────────────────
-function drawIdleWave(ctx, width, height, phase) {
-  const cx = width / 2;
-  const cy = height / 2;
+function drawIdleWave(ctx, width, height) {
+  const cx = width * 0.78;
+  const cy = height * 0.5;
+  const ribbonW = width * 0.32;
 
-  ctx.save();
-  ctx.translate(cx, cy);
-
-  // Slow gentle sine
-  ctx.beginPath();
-  ctx.strokeStyle = `hsla(195, 70%, 65%, 0.4)`;
-  ctx.lineWidth   = 1.8;
-  ctx.shadowColor = `hsl(195, 80%, 65%)`;
-  ctx.shadowBlur  = 10;
-  ctx.lineCap     = 'round';
-  buildWavePath(ctx, WAVE_FN.sine, 3, 28, phase * 0.4, width, 300);
-  ctx.stroke();
-
-  ctx.restore();
+  drawRibbon(ctx, cx, cy, ribbonW, 45, 0);
 }
 
 // ── Laser beam ─────────────────────────────────────────────────────
@@ -184,22 +167,4 @@ function drawLaser(ctx, engine, width, height) {
   ctx.stroke();
 
   ctx.restore();
-}
-
-// ── Pulse rings around wave centre ─────────────────────────────────
-function drawPulseRings(ctx, cx, cy, hue, phase) {
-  for (let i = 0; i < 3; i++) {
-    const r     = 12 + i * 18 + Math.sin(phase * 1.5 + i * 1.2) * 5;
-    const alpha = Math.max(0, 0.14 - i * 0.04);
-
-    ctx.save();
-    ctx.strokeStyle = `hsla(${hue}, 90%, 65%, ${alpha})`;
-    ctx.lineWidth   = 1;
-    ctx.shadowColor = `hsl(${hue}, 90%, 65%)`;
-    ctx.shadowBlur  = 6;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-  }
 }

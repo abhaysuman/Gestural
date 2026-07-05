@@ -29,6 +29,12 @@ function createEngine() {
     // Lerped wave Y anchor (canvas pixels)
     smoothedY: window.innerHeight / 2,
 
+    // 3D Wave positions (normalized)
+    waveX: 0.78,
+    waveY: 0.5,
+    smoothedWaveX: 0.78,
+    smoothedWaveY: 0.5,
+
     // Wrist tilt in radians (clamped ±60°)
     tiltAngle: 0,
 
@@ -131,6 +137,10 @@ export default function App() {
       e.frame = (e.frame + 1) % 1000;
       e.wavePhase += 0.04; // wave animation speed
 
+      // Lerp 3D wave position
+      e.smoothedWaveX += (e.waveX - e.smoothedWaveX) * 0.12;
+      e.smoothedWaveY += (e.waveY - e.smoothedWaveY) * 0.12;
+
       // Lerp wave Y anchor toward current hand Y
       const targetY = e.handY * h;
       e.smoothedY  += (targetY - e.smoothedY) * 0.15;
@@ -194,17 +204,52 @@ export default function App() {
   // ── MediaPipe onResults callback ─────────────────────────────
   const handleResults = useCallback((results) => {
     const e   = engineRef.current;
-    const lm  = results.multiHandLandmarks?.[0];
+    const landmarksList  = results.multiHandLandmarks;
+    const handednessList = results.multiHandedness;
     const w   = window.innerWidth;
     const h   = window.innerHeight;
 
-    if (lm) {
+    if (landmarksList && landmarksList.length > 0) {
       e.isTracking = true;
-      e.landmarks  = lm;
+
+      let primaryLm = null;
+      let secondaryLm = null;
+
+      if (landmarksList.length === 1) {
+        primaryLm = landmarksList[0];
+      } else if (landmarksList.length >= 2) {
+        if (handednessList && handednessList.length >= 2) {
+          const label0 = handednessList[0].label;
+          if (label0 === 'Right') {
+            // "Right" in MediaPipe actually means user's left hand in mirror mode
+            primaryLm = landmarksList[0];
+            secondaryLm = landmarksList[1];
+          } else {
+            primaryLm = landmarksList[1];
+            secondaryLm = landmarksList[0];
+          }
+        } else {
+          primaryLm = landmarksList[0];
+          secondaryLm = landmarksList[1];
+        }
+      }
+
+      e.landmarks = primaryLm;
+      const lm = primaryLm;
 
       // Mirror X for selfie view (video is CSS-mirrored via scaleX(-1))
       e.handX = 1 - lm[0].x;
       e.handY = lm[0].y;
+
+      // Secondary hand controls the wave
+      if (secondaryLm) {
+        e.waveX = 1 - secondaryLm[0].x;
+        e.waveY = secondaryLm[0].y;
+      } else {
+        // Drift back to default
+        e.waveX += (0.78 - e.waveX) * 0.03;
+        e.waveY += (0.5 - e.waveY) * 0.03;
+      }
 
       // Canvas-space positions
       e.palmX      = e.handX * w;
@@ -255,6 +300,8 @@ export default function App() {
       e.landmarks     = null;
       e.gestureBuffer = [];
       e.gesture       = 'none';
+      e.waveX         = 0.78;
+      e.waveY         = 0.5;
       setStatus('searching');
     }
   }, []);
@@ -279,7 +326,7 @@ export default function App() {
       });
 
       hands.setOptions({
-        maxNumHands:            1,
+        maxNumHands:            2,
         modelComplexity:        1, // full model for better occlusion handling
         minDetectionConfidence: 0.7,
         minTrackingConfidence:  0.6,

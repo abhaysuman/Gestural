@@ -879,85 +879,65 @@
     /* ================================================
        WAVE DRAW
     ================================================ */
-    function drawRibbon(ctx, cx, cy, ribbonW, maxAmp, rotation, useAnalyser) {
+    function drawRibbon(ctx, cx, cy, ribbonW, amp, rotation) {
       ctx.save();
       ctx.translate(cx, cy);
       if (rotation) ctx.rotate(rotation);
 
       const t = Date.now() / 1000;
-      const numStrands = 8;
-      const pointsPerStrand = 200;
+      const numStrands = 12;
+      const ptsPerStrand = 180;
       const halfW = ribbonW / 2;
 
-      // Get analyser data if available
-      let aData = null;
-      if (useAnalyser && analyserNode) {
-        analyserNode.getByteTimeDomainData(analyserData);
-        aData = analyserData;
-      }
-
-      // Collect all dots with z-depth for back-to-front sorting
+      // Pre-build all dots
       const dots = [];
 
       for (let s = 0; s < numStrands; s++) {
-        const strandPhase = (s / numStrands) * Math.PI * 2;
-        const strandOffset = ((s / numStrands) - 0.5) * 2; // -1 to 1
+        const sp = (s / numStrands) * Math.PI * 2; // strand phase
 
-        for (let i = 0; i < pointsPerStrand; i++) {
-          const tNorm = i / (pointsPerStrand - 1);
-          const x = tNorm * ribbonW - halfW;
+        for (let i = 0; i < ptsPerStrand; i++) {
+          const n = i / (ptsPerStrand - 1); // 0..1 normalized position
+          const x = n * ribbonW - halfW;
 
-          // Multiple sine layers for organic flow
-          const wave1 = Math.sin(tNorm * Math.PI * 3 + strandPhase + t * 1.2);
-          const wave2 = Math.sin(tNorm * Math.PI * 5 - strandPhase * 0.7 + t * 0.8);
-          const wave3 = Math.cos(tNorm * Math.PI * 2 + strandPhase * 1.3 + t * 1.5);
+          // Edge taper: fade dots at both ends
+          const edge = Math.sin(n * Math.PI);
 
-          // Combine for organic ribbon shape
-          let y = (wave1 * 0.5 + wave2 * 0.3 + wave3 * 0.2) * maxAmp;
+          // 3 overlapping sine waves for organic ribbon shape
+          const w1 = Math.sin(n * Math.PI * 3.0 + sp + t * 1.0);
+          const w2 = Math.sin(n * Math.PI * 5.5 + sp * 0.6 - t * 0.7);
+          const w3 = Math.cos(n * Math.PI * 2.0 - sp * 1.2 + t * 1.3);
+          const y = (w1 * 0.55 + w2 * 0.3 + w3 * 0.15) * amp * edge;
 
-          // Add audio reactivity
-          if (aData) {
-            const dataIndex = Math.floor(tNorm * (aData.length - 1));
-            const v = (aData[dataIndex] / 128.0) - 1.0;
-            y += v * maxAmp * 0.6;
-          }
+          // Z for 3D depth layering
+          const z = (Math.sin(n * Math.PI * 4 + sp + t * 1.8) + 1) * 0.5;
 
-          // Z-depth for 3D effect (determines size and opacity)
-          const zWave = Math.sin(tNorm * Math.PI * 4 + strandPhase + t * 2.0);
-          const z = zWave * 0.5 + 0.5; // 0 (back) to 1 (front)
+          // Color: blue(220) → violet(280) → magenta(330)
+          const hue = 220 + n * 110;
+          const sat = 80 + z * 20;
+          const light = 50 + z * 25;
 
-          // Spread strands vertically based on offset
-          y += strandOffset * maxAmp * 0.15 * wave3;
-
-          // Color: blue (left) → violet (center) → magenta/pink (right)
-          const hue = 220 + tNorm * 120; // 220 (blue) → 340 (magenta)
-          const sat = 85 + z * 15;
-          const light = 55 + z * 20;
-
-          // Size based on depth
-          const baseSize = 1.0 + z * 2.5;
-          // Taper at edges
-          const edgeFade = Math.sin(tNorm * Math.PI);
-          const size = baseSize * (0.3 + edgeFade * 0.7);
-
-          // Opacity based on depth and edge fade
-          const alpha = (0.3 + z * 0.7) * (0.2 + edgeFade * 0.8);
+          // Size: depth + edge taper
+          const size = (0.8 + z * 2.0) * (0.3 + edge * 0.7);
+          // Opacity
+          const alpha = (0.25 + z * 0.75) * (0.15 + edge * 0.85);
 
           dots.push({ x, y, z, size, hue, sat, light, alpha });
         }
       }
 
-      // Sort back-to-front for proper layering
+      // Sort back-to-front
       dots.sort((a, b) => a.z - b.z);
 
-      // Draw all dots
+      // Draw
+      ctx.shadowBlur = 0; // reset once
       for (const d of dots) {
+        if (d.size < 0.3 || d.alpha < 0.05) continue; // skip invisible dots
         ctx.globalAlpha = d.alpha;
         ctx.fillStyle = `hsl(${d.hue}, ${d.sat}%, ${d.light}%)`;
-        ctx.shadowColor = `hsla(${d.hue}, 90%, 70%, ${d.alpha * 0.8})`;
-        ctx.shadowBlur = 4 + d.z * 8;
+        ctx.shadowColor = `hsl(${d.hue}, 90%, 70%)`;
+        ctx.shadowBlur = 3 + d.z * 6;
         ctx.beginPath();
-        ctx.arc(d.x, d.y, Math.max(0.5, d.size), 0, Math.PI * 2);
+        ctx.arc(d.x, d.y, d.size, 0, Math.PI * 2);
         ctx.fill();
       }
 
@@ -969,29 +949,32 @@
       wCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
       if (!state.isTracking || !state.audioStarted) return;
 
-      if (state.reducedMotion) {
-        state.smoothedWaveX = state.waveX;
-        state.smoothedWaveY = state.waveY;
-      } else {
-        state.smoothedWaveX += (state.waveX - state.smoothedWaveX) * 0.15;
-        state.smoothedWaveY += (state.waveY - state.smoothedWaveY) * 0.15;
+      // Smooth wave position
+      state.smoothedWaveX += (state.waveX - state.smoothedWaveX) * 0.12;
+      state.smoothedWaveY += (state.waveY - state.smoothedWaveY) * 0.12;
+
+      // Audio-reactive amplitude boost
+      let audioBoost = 0;
+      if (analyserNode) {
+        analyserNode.getByteTimeDomainData(analyserData);
+        for (let i = 0; i < analyserData.length; i++) {
+          audioBoost += Math.abs((analyserData[i] / 128.0) - 1.0);
+        }
+        audioBoost = (audioBoost / analyserData.length) * 3;
       }
 
-      // Volume modulates amplitude
-      const volume = state.gesture === 'fist' ? 0 : (1 - state.handY) * 0.6;
-      const ampScale = volume / 0.6;
-      const maxAmp = 40 + (waveCanvas.height * 0.12) * ampScale;
+      const baseAmp = 45;
+      const maxAmp = baseAmp + audioBoost * 40;
 
       const cx = state.smoothedWaveX * waveCanvas.width;
       const cy = state.smoothedWaveY * waveCanvas.height;
-      const ribbonW = waveCanvas.width * 0.35;
+      const ribbonW = waveCanvas.width * 0.32;
 
-      drawRibbon(wCtx, cx, cy, ribbonW, maxAmp, 0, true);
+      drawRibbon(wCtx, cx, cy, ribbonW, maxAmp, 0);
 
       // --- Laser beam from index finger ---
       if (state.gesture === 'point' && state.landmarks) {
         drawLaser();
-        return;
       }
     }
 
@@ -1150,38 +1133,52 @@
     ================================================ */
     function onResults(results) {
       const landmarksList = results.multiHandLandmarks;
+      const handednessList = results.multiHandedness;
 
       if (landmarksList && landmarksList.length > 0) {
         state.isTracking = true;
-        
-        const primaryLm = landmarksList[0];
-        const secondaryLm = landmarksList.length > 1 ? landmarksList[1] : null;
+
+        let primaryLm = null;
+        let secondaryLm = null;
+
+        if (landmarksList.length === 1) {
+          primaryLm = landmarksList[0];
+        } else if (landmarksList.length >= 2) {
+          if (handednessList && handednessList.length >= 2) {
+            const label0 = handednessList[0].label;
+            if (label0 === 'Right') {
+              primaryLm = landmarksList[0];
+              secondaryLm = landmarksList[1];
+            } else {
+              primaryLm = landmarksList[1];
+              secondaryLm = landmarksList[0];
+            }
+          } else {
+            primaryLm = landmarksList[0];
+            secondaryLm = landmarksList[1];
+          }
+        }
 
         state.landmarks = primaryLm;
 
-        // Raw hand position from wrist (landmark 0)
-        // x is flipped in mirrored video
+        // Primary hand: synth control
         state.handX = 1 - primaryLm[0].x;
         state.handY = primaryLm[0].y;
-
-        // Palm position for particles (canvas coords)
         state.palmX = state.handX * particleCanvas.width;
         state.palmY = state.handY * particleCanvas.height;
-
-        // Index fingertip for laser (canvas coords, mirrored)
         state.indexTipX = (1 - primaryLm[8].x) * waveCanvas.width;
         state.indexTipY = primaryLm[8].y * waveCanvas.height;
 
+        // Secondary hand: wave position control
         if (secondaryLm) {
           state.waveX = 1 - secondaryLm[0].x;
           state.waveY = secondaryLm[0].y;
         } else {
-          // Gently return to default position if no secondary hand
-          state.waveX += (0.75 - state.waveX) * 0.05;
-          state.waveY += (0.5 - state.waveY) * 0.05;
+          state.waveX += (0.78 - state.waveX) * 0.03;
+          state.waveY += (0.5 - state.waveY) * 0.03;
         }
 
-        // Wrist tilt: angle from landmark 0 to landmark 9
+        // Wrist tilt
         const wrist = primaryLm[0];
         const mcp9  = primaryLm[9];
         const rawAngle = Math.atan2(mcp9.y - wrist.y, (1 - mcp9.x) - (1 - wrist.x));
@@ -1224,7 +1221,7 @@
         state.landmarks = null;
         state.gestureBuffer = [];
         state.gesture = 'none';
-        state.waveX = 0.75;
+        state.waveX = 0.78;
         state.waveY = 0.5;
         hCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
         silenceAudio();
@@ -1234,7 +1231,7 @@
         statusLabel.classList.remove('active');
       }
 
-      drawHand(lm ? state.landmarks : null);
+      drawHand(state.landmarks || null);
     }
 
     /* ================================================
@@ -1336,11 +1333,11 @@
       function idle() {
         wCtx.clearRect(0, 0, waveCanvas.width, waveCanvas.height);
 
-        const cx = waveCanvas.width * 0.75;
+        const cx = waveCanvas.width * 0.78;
         const cy = waveCanvas.height * 0.5;
-        const ribbonW = waveCanvas.width * 0.35;
+        const ribbonW = waveCanvas.width * 0.32;
 
-        drawRibbon(wCtx, cx, cy, ribbonW, 35, 0, false);
+        drawRibbon(wCtx, cx, cy, ribbonW, 45, 0);
 
         if (!state.isTracking && !state.audioStarted) {
           requestAnimationFrame(idle);

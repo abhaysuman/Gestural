@@ -986,7 +986,7 @@
       const cy = state.smoothedWaveY * waveCanvas.height;
       const ribbonW = waveCanvas.width * 0.35;
 
-      drawRibbon(wCtx, cx, cy, ribbonW, maxAmp, state.tiltAngle, true);
+      drawRibbon(wCtx, cx, cy, ribbonW, maxAmp, 0, true);
 
       // --- Laser beam from index finger ---
       if (state.gesture === 'point' && state.landmarks) {
